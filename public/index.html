@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Biblical AI Tools – Standalone App</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col items-center p-6">
+  <div class="w-full max-w-3xl bg-white shadow-lg rounded-2xl p-6 space-y-6">
+    <h1 class="text-2xl font-bold text-center text-blue-700">Biblical AI Ministry Toolkit</h1>
+
+    <!-- Step 1: Choose AI Provider -->
+    <div>
+      <label class="block text-gray-700 font-semibold mb-2">Select AI Provider:</label>
+      <select id="aiProvider" class="w-full p-2 border rounded">
+        <option value="chatgpt">ChatGPT (default)</option>
+        <option value="gemini">Google Gemini</option>
+        <option value="copilot">Microsoft Copilot (Azure OpenAI)</option>
+      </select>
+      <button id="loginBtn" class="mt-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Sign in</button>
+      <p id="loginStatus" class="text-sm text-green-600 mt-2 hidden"></p>
+    </div>
+
+    <!-- Step 2: Choose Task -->
+    <div>
+      <label class="block text-gray-700 font-semibold mb-2">Select Task:</label>
+      <select id="taskSelect" class="w-full p-2 border rounded">
+        <option value="">-- Choose Task --</option>
+        <option value="sermonCrafter">Sermon Crafter</option>
+        <option value="sermonEnhancer">Sermon Enhancer</option>
+        <option value="bibleStudyTool">Bible Study Tool</option>
+        <option value="biblicalApplications">Biblical Applications</option>
+      </select>
+    </div>
+
+    <!-- Step 3: Input -->
+    <div>
+      <textarea id="userInput" rows="5"
+        class="w-full border p-3 rounded focus:outline-none focus:ring focus:ring-blue-300 resize-y"
+        placeholder="Enter your topic, text, or sermon idea..."></textarea>
+      <button id="generateBtn"
+        class="mt-3 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Generate</button>
+    </div>
+
+    <!-- Step 4: Output (Resizable + Copy + Export) -->
+    <div>
+      <div class="flex items-center justify-between mt-4">
+        <h2 class="text-xl font-semibold text-gray-700">Response</h2>
+        <div class="flex gap-2">
+          <button id="copyBtn"
+            class="px-3 py-1.5 bg-gray-200 text-gray-800 rounded hover:bg-gray-300">
+            Copy
+          </button>
+          <button id="exportWordBtn"
+            class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+            Export to Word
+          </button>
+        </div>
+      </div>
+
+      <!-- RESPONSE is now a textarea so the user can resize it -->
+      <textarea id="responseBox" rows="12" readonly
+        class="w-full border rounded p-4 mt-2 bg-gray-100 text-gray-800 resize-y"
+        placeholder="Your response will appear here..."></textarea>
+    </div>
+  </div>
+
+  <script>
+    // ---- Grab elements
+    const aiProvider = document.getElementById('aiProvider');
+    const loginBtn = document.getElementById('loginBtn');
+    const loginStatus = document.getElementById('loginStatus');
+    const taskSelect = document.getElementById('taskSelect');
+    const generateBtn = document.getElementById('generateBtn');
+    const responseBox = document.getElementById('responseBox'); // textarea
+    const userInput = document.getElementById('userInput');
+    const copyBtn = document.getElementById('copyBtn');
+    const exportWordBtn = document.getElementById('exportWordBtn');
+
+    let isLoggedIn = false;
+
+    // ---- Sign in (checks which providers are configured on the server)
+    loginBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.message || 'Login failed');
+        isLoggedIn = true;
+        loginStatus.classList.remove('hidden');
+        loginStatus.classList.remove('text-red-600');
+        loginStatus.classList.add('text-green-600');
+        loginStatus.textContent = `Ready. Available providers: ${data.available.join(', ')}`;
+      } catch (e) {
+        isLoggedIn = false;
+        loginStatus.classList.remove('hidden');
+        loginStatus.classList.remove('text-green-600');
+        loginStatus.classList.add('text-red-600');
+        loginStatus.textContent = 'Login error: ' + e.message;
+      }
+    });
+
+    // ---- Generate (calls backend, then sanitizes text)
+    generateBtn.addEventListener('click', async () => {
+      if (!isLoggedIn) { alert('Please sign in first.'); return; }
+      const task = taskSelect.value;
+      const input = userInput.value.trim();
+      if (!task) { alert('Please select a task.'); return; }
+      if (!input) { alert('Please enter some text.'); return; }
+
+      responseBox.value = `Thinking with ${aiProvider.value}...`;
+
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: aiProvider.value, task, input })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Generation failed');
+
+        // Clean up markdown-like symbols before showing
+        const cleaned = sanitizeText(data.output || '');
+        responseBox.value = cleaned;
+      } catch (e) {
+        responseBox.value = `Error: ${e.message}`;
+      }
+    });
+
+    // ---- Copy result to clipboard
+    copyBtn.addEventListener('click', async () => {
+      const text = responseBox.value || '';
+      if (!text.trim()) { alert('Nothing to copy yet.'); return; }
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = copyBtn.textContent;
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => (copyBtn.textContent = original), 1200);
+      } catch {
+        alert('Copy failed. You can select the text and press Ctrl/Cmd+C.');
+      }
+    });
+
+    // ---- Export to Word (.doc via simple HTML wrapper)
+    exportWordBtn.addEventListener('click', () => {
+      const text = responseBox.value || '';
+      if (!text.trim()) { alert('Nothing to export yet.'); return; }
+      const filename = `BiblicalAI_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.doc`;
+      exportToWord(text, filename);
+    });
+
+    // ---- Sanitizer: remove markdown-ish symbols (#, *, _, backticks, bullets, blockquotes)
+    function sanitizeText(s) {
+      if (!s) return '';
+
+      // remove code fences and inline backticks
+      s = s.replace(/`{1,3}/g, '');
+
+      // strip heading markers like "## " or "### " at start of lines
+      s = s.replace(/^[ \t]*#{1,6}[ \t]*/gm, '');
+
+      // remove leading markdown bullets (-, *, •) followed by space
+      s = s.replace(/^[ \t]*[-*•][ \t]+/gm, '');
+
+      // remove emphasis markers *italic*, **bold**, _italic_, __bold__
+      s = s.replace(/(\*\*|\*)([^*]+)(\*\*|\*)/g, '$2'); // asterisks
+      s = s.replace(/(__|_)([^_]+)(__|_)/g, '$2');       // underscores
+
+      // remove leading blockquote '>'
+      s = s.replace(/^[ \t]*>[ \t]?/gm, '');
+
+      // collapse 3+ blank lines to 2
+      s = s.replace(/\n{3,}/g, '\n\n');
+
+      return s.trim();
+    }
+
+    // ---- Export helper: builds a .doc (HTML) that opens in Word
+    function exportToWord(plainText, filename = 'export.doc') {
+      const safe = plainText
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br>');
+
+      const html =
+`<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Export</title></head>
+<body style="font-family:Calibri, Arial, sans-serif; white-space:normal; line-height:1.4;">
+  ${safe}
+</body>
+</html>`;
+
+      const blob = new Blob([html], { type: 'application/msword' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+
+      URL.revokeObjectURL(url);
+      a.remove();
+    }
+  </script>
+</body>
+</html>
