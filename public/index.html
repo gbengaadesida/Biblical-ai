@@ -14,9 +14,9 @@
     <div>
       <label class="block text-gray-700 font-semibold mb-2">Select AI Provider:</label>
       <select id="aiProvider" class="w-full p-2 border rounded">
-        <option value="chatgpt">ChatGPT (default)</option>
-        <option value="gemini">Google Gemini</option>
-        <option value="copilot">Microsoft Copilot (Azure OpenAI)</option>
+      <option value="gemini">Google Gemini(default)</option> 
+      <option value="chatgpt">ChatGPT</option>
+      <option value="copilot">Microsoft Copilot (Azure OpenAI)</option>
       </select>
       <button id="loginBtn" class="mt-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Sign in</button>
       <p id="loginStatus" class="text-sm text-green-600 mt-2 hidden"></p>
@@ -39,8 +39,20 @@
       <textarea id="userInput" rows="5"
         class="w-full border p-3 rounded focus:outline-none focus:ring focus:ring-blue-300 resize-y"
         placeholder="Enter your topic, text, or sermon idea..."></textarea>
-      <button id="generateBtn"
-        class="mt-3 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Generate</button>
+
+      <div class="mt-3 flex flex-wrap gap-2">
+        <button id="generateBtn"
+          class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+          Generate
+        </button>
+
+        <!-- Appears only after Sermon Crafter Step 1 (outline) -->
+        <button id="approveBtn"
+          class="hidden px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700"
+          title="Approve the outline and draft the full sermon">
+          Approve Outline → Draft Full Sermon
+        </button>
+      </div>
     </div>
 
     <!-- Step 4: Output (Resizable + Copy + Export) -->
@@ -59,48 +71,51 @@
         </div>
       </div>
 
-      <!-- RESPONSE is now a textarea so the user can resize it -->
-      <textarea id="responseBox" rows="12" readonly
+      <!-- RESPONSE is a textarea so the user can resize it -->
+      <textarea id="responseBox" rows="14" readonly
         class="w-full border rounded p-4 mt-2 bg-gray-100 text-gray-800 resize-y"
         placeholder="Your response will appear here..."></textarea>
     </div>
   </div>
 
   <script>
-    // ---- Grab elements
+    // ---- Elements
     const aiProvider = document.getElementById('aiProvider');
     const loginBtn = document.getElementById('loginBtn');
     const loginStatus = document.getElementById('loginStatus');
     const taskSelect = document.getElementById('taskSelect');
     const generateBtn = document.getElementById('generateBtn');
+    const approveBtn = document.getElementById('approveBtn');
     const responseBox = document.getElementById('responseBox'); // textarea
     const userInput = document.getElementById('userInput');
     const copyBtn = document.getElementById('copyBtn');
     const exportWordBtn = document.getElementById('exportWordBtn');
 
     let isLoggedIn = false;
+    let lastTask = '';
+    let lastMode = 'default';     // 'default' | 'outline' | 'full'
+    let lastTopic = '';           // for Sermon Crafter (the original topic/prompt)
+    let lastOutline = '';         // captured outline (sanitized) from Step 1
 
-    // ---- Sign in (checks which providers are configured on the server)
+    // ---- Sign in
     loginBtn.addEventListener('click', async () => {
       try {
         const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
         const data = await res.json();
         if (!data.ok) throw new Error(data.message || 'Login failed');
         isLoggedIn = true;
-        loginStatus.classList.remove('hidden');
-        loginStatus.classList.remove('text-red-600');
+        loginStatus.classList.remove('hidden', 'text-red-600');
         loginStatus.classList.add('text-green-600');
         loginStatus.textContent = `Ready. Available providers: ${data.available.join(', ')}`;
       } catch (e) {
         isLoggedIn = false;
-        loginStatus.classList.remove('hidden');
-        loginStatus.classList.remove('text-green-600');
+        loginStatus.classList.remove('hidden', 'text-green-600');
         loginStatus.classList.add('text-red-600');
         loginStatus.textContent = 'Login error: ' + e.message;
       }
     });
 
-    // ---- Generate (calls backend, then sanitizes text)
+    // ---- Generate (Step 1 for Sermon Crafter == 'outline'; others == 'default')
     generateBtn.addEventListener('click', async () => {
       if (!isLoggedIn) { alert('Please sign in first.'); return; }
       const task = taskSelect.value;
@@ -108,26 +123,70 @@
       if (!task) { alert('Please select a task.'); return; }
       if (!input) { alert('Please enter some text.'); return; }
 
+      lastTask = task;
+      lastTopic = input;
+      const mode = (task === 'sermonCrafter') ? 'outline' : 'default';
+      lastMode = mode;
+
+      // Reset approve state and UI
+      approveBtn.classList.add('hidden');
       responseBox.value = `Thinking with ${aiProvider.value}...`;
 
       try {
         const res = await fetch('/api/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: aiProvider.value, task, input })
+          body: JSON.stringify({ provider: aiProvider.value, task, input, mode })
         });
         const data = await res.json();
         if (!data.ok) throw new Error(data.error || 'Generation failed');
 
-        // Clean up markdown-like symbols before showing
         const cleaned = sanitizeText(data.output || '');
         responseBox.value = cleaned;
+
+        // If Sermon Crafter outline, show Approve button
+        if (task === 'sermonCrafter' && mode === 'outline') {
+          lastOutline = cleaned;
+          approveBtn.classList.remove('hidden');
+        }
       } catch (e) {
         responseBox.value = `Error: ${e.message}`;
       }
     });
 
-    // ---- Copy result to clipboard
+    // ---- Approve Outline → Draft Full Sermon (Step 2)
+    approveBtn.addEventListener('click', async () => {
+      if (!isLoggedIn) { alert('Please sign in first.'); return; }
+      if (lastTask !== 'sermonCrafter') { alert('This action is only for Sermon Crafter.'); return; }
+      if (!lastOutline.trim()) { alert('No outline to approve.'); return; }
+
+      lastMode = 'full';
+      responseBox.value = 'Drafting full sermon...';
+
+      // Compose the input: topic + approved outline
+      const fullInput =
+        `Sermon topic or passage:\n${lastTopic}\n\nApproved outline:\n${lastOutline}\n\nPlease write the complete sermon that strictly follows this outline.`;
+
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider: aiProvider.value, task: 'sermonCrafter', input: fullInput, mode: 'full' })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Generation failed');
+
+        const cleaned = sanitizeText(data.output || '');
+        responseBox.value = cleaned;
+
+        // Hide approve after full sermon
+        approveBtn.classList.add('hidden');
+      } catch (e) {
+        responseBox.value = `Error: ${e.message}`;
+      }
+    });
+
+    // ---- Copy to clipboard
     copyBtn.addEventListener('click', async () => {
       const text = responseBox.value || '';
       if (!text.trim()) { alert('Nothing to copy yet.'); return; }
